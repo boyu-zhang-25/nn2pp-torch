@@ -11,39 +11,22 @@ from teacher_student import *
 from teacher_dataset import *
 
 
-def get_Q(path_to_mask_list, path_to_teacher, input_dim):
+def get_Q(path_to_student, path_to_teacher, input_dim):
 
-	unpurned_MLP, mask_list = pickle.load(open(path_to_mask_list, 'rb'))
-
-	print('student w2:', unpurned_MLP.w2.weight.data)
-	mask_num = len(mask_list)
-	w1 = unpurned_MLP.w1.weight.data.cpu().numpy() # hid_dim * inp_dim
+	
+	model.load_state_dict(torch.load(args.trained_weights, map_location = torch.device('cpu')))
+	w1 = stu.w1.weight.data.cpu().numpy() # hid_dim * inp_dim
 	hid_dim, inp_dim = w1.shape[0], w1.shape[1]
 	print('student w1 size:', w1.shape, 'mask size:', mask_list[0].T.shape)
-
-	# get the expected Q
-	expected_Q = np.zeros((hid_dim, hid_dim))
-	for mask in mask_list:
-		purned_w = w1 * mask.T
-		expected_Q += np.dot(purned_w, purned_w.T)
-	expected_Q = expected_Q / mask_num
-	expected_Q = expected_Q / input_dim
-
-	# get the unpruned Q
-	unpurned_Q = np.dot(w1, w1.T) / input_dim
+	Q = np.dot(w1, w1.T) / input_dim
 
 	# get the teacher net
 	teacher = pickle.load(open(path_to_teacher, 'rb'))
 	teahcer_w1 = teacher.w1.data.cpu().numpy() # teacher_hid_dim * input_dim
 	print('teacher w1 size:', teahcer_w1.shape)
-
-	'''
-	teahcer_w1 = np.load('/Users/mac/Desktop/pyscm/scm_erf_erf_N500_M2_K5_lr0.5_wd0_sigma0_bs1_i1steps800_s0_teacher.npy')
-	print('teacher loaded')
-	'''
 	
-	teacher_Q = np.dot(teahcer_w1, teahcer_w1.T) / input_dim
-	return expected_Q, unpurned_Q, teacher_Q
+	T = np.dot(teahcer_w1, teahcer_w1.T) / input_dim
+	return Q, T
 
 def plot_Q(expected_Q, unpurned_Q, teacher_Q):
 
@@ -158,18 +141,16 @@ def plot_R(expected_R, unpurned_R):
 def main():
 
 	parser = argparse.ArgumentParser(description='Order Parameter')
-	parser.add_argument('--path_to_student_mask', type = str)
+	parser.add_argument('--path_to_student', type = str)
 	parser.add_argument('--path_to_teacher', type = str, default = 'place_holder')
 	parser.add_argument('--input_dim', type = int, help='The input dimension for each data point.')
 	args = parser.parse_args()
 
-	'''
-	expected_Q, unpurned_Q, teacher_Q = get_Q(args.path_to_student_mask, args.path_to_teacher, args.input_dim)
-	plot_Q(expected_Q, unpurned_Q, teacher_Q)
+	Q, T = get_Q(args.path_to_student, args.path_to_teacher, args.input_dim)
+	plot_Q(Q, T)
 
-	expected_R, unpurned_R = get_R(args.path_to_student_mask, args.path_to_teacher, args.input_dim)
-	plot_R(expected_R, unpurned_R)
-	'''
+	R = get_R(args.path_to_student, args.path_to_teacher, args.input_dim)
+	plot_R(R)
 
 if __name__ == '__main__':
 	main()
