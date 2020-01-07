@@ -8,6 +8,7 @@ import pickle
 import matplotlib.pyplot as plt
 
 from teacher_dataset import *
+from dpp_sample_expected import *
 
 # the student network
 # switch between soft committee machine and two-layer FFNN
@@ -40,15 +41,13 @@ class student_MLP(nn.Module):
 		if self.nonlinearity == 'relu':
 			self.activation = nn.ReLU()
 		elif self.nonlinearity == 'sigmoid':
-			self.activation = nn.Sigmoid()
+			# use torch.ERF instead
+			pass
 		else:
 			pass			
 
 		self.device = device
 		self.initialize()
-
-		# np.save('student_w1', self.w1.weight.data.numpy())
-		# np.save('student_w2', self.w2.weight.data.numpy())
 
 	# initialization
 	def initialize(self):
@@ -59,11 +58,11 @@ class student_MLP(nn.Module):
 			nn.init.normal_(self.w1.weight.data, std = 1 / math.sqrt(self.input_dim))
 
 		if self.mode == 'soft_committee':
-			print('freeze student w2 as 1.0 for soft_committee')
+			print('soft committee machine (freeze student w2 as 1.0)')
 			nn.init.ones_(self.w2.weight.data)
 			self.w2.weight.requires_grad = False
 		else:
-			print('do NOT freeze student w2')
+			print('two-layer FFNN (DO NOT freeze student w2)')
 			if self.nonlinearity == 'sigmoid':
 				nn.init.normal_(self.w2.weight.data)
 			else:
@@ -74,6 +73,8 @@ class student_MLP(nn.Module):
 	def forward(self, x):
 
 		h = self.w1(x)
+
+		# normalization and ERF activation following [S. Goldt, 2019]
 		h_norm = h / math.sqrt(self.input_dim)
 		h_norm_new = h_norm / math.sqrt(2)
 		a = torch.erf(h_norm_new)
@@ -81,13 +82,12 @@ class student_MLP(nn.Module):
 
 		return output
 
-
-
 # training loop
 # online learning SGD
 def train(args, model, device, train_loader, criterion, optimizer, epoch):
 
 	model.train()
+
 	current_error = 0
 
 	# train_loader: input_dim * num_training_data
@@ -100,12 +100,13 @@ def train(args, model, device, train_loader, criterion, optimizer, epoch):
 		optimizer.zero_grad()
 		output = model(data)
 
+
 		# print(output.shape, target.shape)
 		loss = criterion(output, target.view(-1))
 		loss.backward()
 
-		# manually scale gradient for auto grad
-		# following the paper [S. Goldt, 2019]
+		# manually scale gradient for auto grad 
+		# auto grad does not consider the square in MSE and the normalization in [S. Goldt, 2019]
 		if model.w2.weight.requires_grad:
 
 			model.w2.weight.grad = model.w2.weight.grad / 2
@@ -115,7 +116,6 @@ def train(args, model, device, train_loader, criterion, optimizer, epoch):
 			model.w1.weight.grad = model.w1.weight.grad * math.sqrt(args.input_dim) / 2
 
 		optimizer.step()
-		# print('w1 new:', model.w1.weight.data)
 
 		current_error += loss.item()
 
@@ -123,7 +123,23 @@ def train(args, model, device, train_loader, criterion, optimizer, epoch):
 			print('Train Example: [{}/{}]\tLoss: {:.6f}\t Epoch[{}]'.format(idx, len(train_loader), current_error, epoch))
 			current_error = 0
 
+# testing loop
+def test(args, model, device, teacher_dataset, criterion):
 
+	model.eval()
+	current_error = 0
+
+	test_num = teacher_dataset.test_inputs.shape[1]
+	for idx in range(test_num):
+
+		data, target = teacher_dataset.get_test_example(idx)
+		data, target = data.to(device), target.to(device)
+		output = model(data)
+
+		loss = criterion(output, target.view(-1))
+		current_error += loss.item()
+
+	return current_error / test_num
 
 
 def main():
@@ -147,7 +163,9 @@ def main():
 						help='disables CUDA training')
 	parser.add_argument('--seed', type=int, default=1, metavar='S',
 						help='random seed (default: 1)')
+
 	# data storage
+	parser.add_argument('--trained_weights', type = str, default = 'place_holder', help='path to the trained weights for loading')
 	parser.add_argument('--teacher_path', type = str, help='Path to the teacher network (dataset).')
 	args = parser.parse_args()
 
@@ -169,12 +187,13 @@ def main():
 
 	# soft committee machine; freeze the second layer
 	if args.mode == 'soft_committee':
+		print('soft_committee!')
 		model.w2.weight.requires_grad = False
 		optimizer = optim.SGD([
 								{'params': [model.w1.weight], 'lr' : args.lr / np.sqrt(args.input_dim)},
 								], lr = args.lr, momentum = args.momentum)
 	else:
-		print('training two layers.')
+		print('two-layers NN!')
 		optimizer = optim.SGD([
 								{'params': [model.w1.weight], 'lr' : args.lr / np.sqrt(args.input_dim)},
 								{'params': [model.w2.weight], 'lr' : args.lr / args.input_dim}
@@ -186,16 +205,30 @@ def main():
 		# model = nn.DataParallel(model)
 
 	# get the data set from the teacher network
+	# it is just the teacher dataset... bad naming :)
 	train_loader = pickle.load(open(args.teacher_path, "rb" ))
 
 	# train 
-	print('Training started!')
+	if args.procedure == 'training':
+		print('Training started!')
 
-	# online SGD
-	for epoch in range(args.epoch):
-		train(args, model, device, train_loader, criterion, optimizer, epoch)
+		# online SGD
+		for epoch in range(args.epoch):
+			train(args, model, device, train_loader, criterion, optimizer, epoch)
 
-	torch.save(model.state_dict(), 'student_' + str(args.student_h_size) + '.pth')
+		torch.save(model.state_dict(), 'student_' + str(args.student_h_size) + '.pth')
+
+
+	# testing
+	else:
+		print('Testing:', args.pruning_choice, '\nstudent hidden size:', args.student_h_size, '\nk:', args.k)
+
+		# inference only
+		with torch.no_grad():
+
+			# load the unpruned model and masks
+			file_name = 'student_masks_' + args.pruning_choice + '_' + str(args.student_h_size) + '.pkl'
+			# TODO
 
 
 if __name__ == '__main__':

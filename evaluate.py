@@ -11,27 +11,43 @@ from teacher_student import *
 from teacher_dataset import *
 
 
-def get_Q(path_to_student, path_to_teacher, input_dim):
+def get_Q(path_to_mask_list, path_to_teacher, input_dim):
 
-	
-	model.load_state_dict(torch.load(args.trained_weights, map_location = torch.device('cpu')))
-	w1 = stu.w1.weight.data.cpu().numpy() # hid_dim * inp_dim
+	unpruned_MLP, mask_list = pickle.load(open(path_to_mask_list, 'rb'))
+
+	print('student w2:', unpruned_MLP.w2.weight.data)
+	mask_num = len(mask_list)
+	w1 = unpruned_MLP.w1.weight.data.cpu().numpy() # hid_dim * inp_dim
 	hid_dim, inp_dim = w1.shape[0], w1.shape[1]
 	print('student w1 size:', w1.shape, 'mask size:', mask_list[0].T.shape)
-	Q = np.dot(w1, w1.T) / input_dim
+
+	# get the expected Q
+	expected_Q = np.zeros((hid_dim, hid_dim))
+	for mask in mask_list:
+		purned_w = w1 * mask.T
+		expected_Q += np.dot(purned_w, purned_w.T)
+	expected_Q = expected_Q / mask_num
+	expected_Q = expected_Q / input_dim
+
+	# get the unpruned Q
+	unpruned_Q = np.dot(w1, w1.T) / input_dim
 
 	# get the teacher net
 	teacher = pickle.load(open(path_to_teacher, 'rb'))
 	teahcer_w1 = teacher.w1.data.cpu().numpy() # teacher_hid_dim * input_dim
 	print('teacher w1 size:', teahcer_w1.shape)
 	
-	T = np.dot(teahcer_w1, teahcer_w1.T) / input_dim
-	return Q, T
+	teacher_Q = np.dot(teahcer_w1, teahcer_w1.T) / input_dim
 
-def plot_Q(expected_Q, unpurned_Q, teacher_Q):
+
+
+	return expected_Q, unpruned_Q, teacher_Q
+
+def plot_Q(expected_Q, unpruned_Q, teacher_Q):
 
 	plt.figure(1)
 	fig, ax = plt.subplots()
+	expected_Q = abs(expected_Q)
 	im = ax.imshow(expected_Q)
 
 	# Loop over data dimensions and create text annotations.
@@ -46,20 +62,22 @@ def plot_Q(expected_Q, unpurned_Q, teacher_Q):
 
 	plt.figure(2)
 	fig, ax = plt.subplots()
-	im = ax.imshow(unpurned_Q)
+	unpruned_Q = abs(unpruned_Q)
+	im = ax.imshow(unpruned_Q)
 
 	# Loop over data dimensions and create text annotations.
-	for i in range(len(unpurned_Q)):
-		for j in range(len(unpurned_Q)):
-			text = ax.text(j, i, '%.3f'%unpurned_Q[i, j],
+	for i in range(len(unpruned_Q)):
+		for j in range(len(unpruned_Q)):
+			text = ax.text(j, i, '%.3f'%unpruned_Q[i, j],
 						   ha="center", va="center", color="w")
 
-	ax.set_title("unpurned_Q")
+	ax.set_title("unpruned_Q")
 	fig.tight_layout()
-	plt.savefig('unpurned_Q.png')
+	plt.savefig('unpruned_Q.png')
 
 	plt.figure(3)
 	fig, ax = plt.subplots()
+	teacher_Q = abs(teacher_Q)
 	im = ax.imshow(teacher_Q)
 
 	# Loop over data dimensions and create text annotations.
@@ -76,9 +94,9 @@ def plot_Q(expected_Q, unpurned_Q, teacher_Q):
 def get_R(path_to_student_mask, path_to_teacher, input_dim):
 
 	# get the student net
-	unpurned_MLP, mask_list = pickle.load(open(path_to_student_mask, 'rb'))
+	unpruned_MLP, mask_list = pickle.load(open(path_to_student_mask, 'rb'))
 	mask_num = len(mask_list)
-	student_w1 = unpurned_MLP.w1.weight.data.cpu().numpy() # student_hid_dim * inp_dim
+	student_w1 = unpruned_MLP.w1.weight.data.cpu().numpy() # student_hid_dim * inp_dim
 	student_hid_dim, inp_dim = student_w1.shape[0], student_w1.shape[1]
 	print('student w1 size:', student_w1.shape, 'mask size:', mask_list[0].T.shape)
 
@@ -87,12 +105,7 @@ def get_R(path_to_student_mask, path_to_teacher, input_dim):
 	teahcer_w1 = teacher.w1.data.cpu().numpy().T # input_dim * teacher_hid_dim
 	teacher_hid_dim = teahcer_w1.shape[1]
 	print('teacher w1 size:', teahcer_w1.shape)
-
-	'''
-	teahcer_w1 = np.load('/Users/mac/Desktop/pyscm/scm_erf_erf_N500_M2_K5_lr0.5_wd0_sigma0_bs1_i1steps800_s0_teacher.npy')
-	print('teacher loaded')
-	teahcer_w1 = teahcer_w1.T
-	'''
+	
 
 	# get the expected R on purned student_w1
 	# student_hid_dim * teacher_hid_dim
@@ -101,16 +114,17 @@ def get_R(path_to_student_mask, path_to_teacher, input_dim):
 		expected_R += np.dot(student_w1 * mask.T, teahcer_w1)
 	expected_R = expected_R / mask_num
 
-	# get the expected R on unpurned student_w1
-	unpurned_R = np.dot(student_w1, teahcer_w1)
+	# get the expected R on unpruned student_w1
+	unpruned_R = np.dot(student_w1, teahcer_w1)
 
-	# pickle.dump((expected_R, unpurned_R), open('expected_R', "wb"))
-	return expected_R / input_dim, unpurned_R / input_dim
+	# pickle.dump((expected_R, unpruned_R), open('expected_R', "wb"))
+	return expected_R / input_dim, unpruned_R / input_dim
 
-def plot_R(expected_R, unpurned_R):
+def plot_R(expected_R, unpruned_R):
 
 	plt.figure(1)
 	fig, ax = plt.subplots()
+	expected_R = abs(expected_R)
 	im = ax.imshow(expected_R)
 
 	# Loop over data dimensions and create text annotations.
@@ -125,32 +139,75 @@ def plot_R(expected_R, unpurned_R):
 
 	plt.figure(2)
 	fig, ax = plt.subplots()
-	im = ax.imshow(unpurned_R)
+	unpruned_R = abs(unpruned_R)
+	im = ax.imshow(unpruned_R)
 
 	# Loop over data dimensions and create text annotations.
-	for i in range(len(unpurned_R)):
-		for j in range(len(unpurned_R[1])):
-			text = ax.text(j, i, '%.3f'%unpurned_R[i, j],
+	for i in range(len(unpruned_R)):
+		for j in range(len(unpruned_R[1])):
+			text = ax.text(j, i, '%.3f'%unpruned_R[i, j],
 						   ha="center", va="center", color="w")
 
-	ax.set_title("unpurned_R")
+	ax.set_title("unpruned_R")
 	fig.tight_layout()
-	plt.savefig('unpurned_R.png')
+	plt.savefig('unpruned_R.png')
 
 
 def main():
 
 	parser = argparse.ArgumentParser(description='Order Parameter')
-	parser.add_argument('--path_to_student', type = str)
+	parser.add_argument('--path_to_student_mask', type = str)
 	parser.add_argument('--path_to_teacher', type = str, default = 'place_holder')
 	parser.add_argument('--input_dim', type = int, help='The input dimension for each data point.')
 	args = parser.parse_args()
 
-	Q, T = get_Q(args.path_to_student, args.path_to_teacher, args.input_dim)
-	plot_Q(Q, T)
+	expected_Q, unpruned_Q, teacher_Q = get_Q(args.path_to_student_mask, args.path_to_teacher, args.input_dim)	
+	expected_R, unpruned_R = get_R(args.path_to_student_mask, args.path_to_teacher, args.input_dim)
+	
+	# Permute the matrix to make it block diagonal
+	student_hid_dim, teacher_hid_dim = unpruned_R.shape
+	z = int(student_hid_dim/teacher_hid_dim)
+	unpruned_R_dash, unpruned_Q_dash, expected_R_dash ,expected_Q_dash = np.zeros((student_hid_dim,teacher_hid_dim)),  np.zeros((student_hid_dim,student_hid_dim)), np.zeros((student_hid_dim,teacher_hid_dim)),  np.zeros((student_hid_dim,student_hid_dim))
+	dic = [[] for x in range(teacher_hid_dim)]
+	for i in range(teacher_hid_dim):
+		for j in range(student_hid_dim):
+			if abs(unpruned_R[j][i])>=0.7:
+				dic[i].append(j)
 
-	R = get_R(args.path_to_student, args.path_to_teacher, args.input_dim)
-	plot_R(R)
+	print(dic,"hello")
+	for x in range(teacher_hid_dim):
+		for y in range(len(dic[x])):
+			new_row = x*z+y
+			cur = dic[x][y]
+			print(new_row,cur)
+			unpruned_R_dash[new_row,:] = unpruned_R[cur,:]
+			expected_R_dash[new_row,:] = expected_R[cur,:]
+
+	for x in range(student_hid_dim):
+		for y in range(x+1):
+
+			i = dic[int(x/z)][x%z]
+			j = dic[int(y/z)][y%z]
+
+			if x==y:
+				unpruned_Q_dash[x][x] =  unpruned_Q[i][i]
+				expected_Q_dash[x][x] =  expected_Q[i][i]
+			else:
+				unpruned_Q_dash[x][y] = unpruned_Q[i][j]
+				unpruned_Q_dash[y][x] = unpruned_Q[i][j]
+
+				expected_Q_dash[x][y] = expected_Q[i][j]
+				expected_Q_dash[y][x] = expected_Q[i][j]
+
+			# unpruned_Q[[new_row,cur],:] = unpruned_Q[[cur,new_row],:]			
+			# expected_Q[[new_row,cur],:] = expected_Q[[cur,new_row],:]
+
+			# unpruned_Q[:,[new_row,cur]] = unpruned_Q[:,[cur,new_row]]
+			# expected_Q[:,[new_row,cur]] = expected_Q[:,[cur,new_row]]
+	
+	plot_Q(expected_Q_dash, unpruned_Q_dash, teacher_Q)
+	plot_R(expected_R_dash, unpruned_R_dash)
+
 
 if __name__ == '__main__':
 	main()
